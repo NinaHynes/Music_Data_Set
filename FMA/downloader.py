@@ -1,110 +1,222 @@
-import subprocess
-import time
-import csv
-import requests
 from bs4 import BeautifulSoup
-import shutil
+import requests
+import re
+from colorama import Fore, Style  # Import Fore and Style
+from typing import Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from save_songs_to_csv import save_songs_to_csv
 import os
-
-def create_custom_firefox_profile(profile_dir: str, download_dir: str) -> None:
-    """Create a Firefox profile directory and add user.js configuration."""
-    os.makedirs(profile_dir, exist_ok=True)
-    
-    # Define the content for user.js
-    user_js_content = """
-    user_pref("browser.download.folderList", 2);
-    user_pref("browser.download.dir", "{download_dir}");
-    user_pref("browser.helperApps.neverAsk.saveToDisk", "audio/mpeg,application/octet-stream");
-    """.format(download_dir=os.path.abspath(download_dir))
-
-    # Write the content to user.js
-    with open(os.path.join(profile_dir, "user.js"), 'w') as f:
-        f.write(user_js_content)
-    
-    print(f"Custom profile created at: {profile_dir}")
+from downloader import trigger_download_from_csv
 
 
-def handle_download_song(download_url: str, profile_dir: str) -> None:
-    """Trigger the download of the song from the given URL using the custom Firefox profile."""
-    try:
-        # Open Firefox with the custom profile to ensure it uses the correct settings
-        firefox_process = open_firefox(profile_dir)
-        if firefox_process:
-            open_new_tab_and_navigate(download_url)
-            # Optionally, close Firefox after the download
-            firefox_process.terminate()
-    except Exception as e:
-        print(f"Failed to handle download: {e}")
 
+def fetch_page_content(url: str, page_size: int) -> str:
+    """Fetch the HTML content of a given URL with a specific page size."""
+    full_url = f"{url}?pageSize={page_size}&page=1&search-genre=Jazz&sort=date&d=0"
+    response = requests.get(full_url)
+    response.raise_for_status()
+    return response.text
 
-def open_firefox(profile_dir: str) -> subprocess.Popen:
-    """Open Firefox with a specified profile directory."""
-    try:
-        print("Opening Firefox with custom profile...")
-        firefox_process = subprocess.Popen(["firefox", "-profile", profile_dir])
-        print("Waiting 5 seconds for Firefox to fully launch...")
-        time.sleep(5)
-        return firefox_process
-    except Exception as e:
-        print(f"Failed to open Firefox: {e}")
-        return None
+# def fetch_and_print_genre_pages(allowed_genres, folder_song_counts):
+#     """Fetch and print the content for each genre page, and extract URLs from data-url attributes."""
+#     genre_dict = {name: url for name, url in allowed_genres}
+#     all_track_links = []
+#     song_data = []
 
-def open_new_tab_and_navigate(track_url: str) -> None:
-    """Open a new tab in Firefox, navigate to the specified track URL, and close the tab."""
-    try:
-        # Open a new tab using keyboard shortcut (Ctrl+T)
-        subprocess.run(["xdotool", "key", "ctrl+t"], check=True)
-        time.sleep(1)  # Wait for the new tab to open
+#     with ThreadPoolExecutor() as executor:
+#         future_to_genre = {}
 
-        # Type the URL and press Enter
-        subprocess.run(["xdotool", "type", track_url], check=True)
-        subprocess.run(["xdotool", "key", "Return"], check=True)
+#         for genre in folder_song_counts.keys():
+#             genre_url = genre_dict.get(genre)
+#             if genre_url:
+#                 print(f"Fetching content for genre: {genre}")
+#                 try:
+#                     max_songs = folder_song_counts[genre]
+#                     page_size = 100
 
-        # Wait for the page to load and perform actions (adjust time as necessary)
-        time.sleep(2)  # Adjust this delay based on how long it takes to load the page
+#                     # Submit a new task to the executor
+#                     future = executor.submit(fetch_all_pages, genre_url, page_size, max_songs, genre)
+#                     future_to_genre[future] = genre
 
-        # Close the current tab (Ctrl+W)
-        subprocess.run(["xdotool", "key", "ctrl+w"], check=True)
-        time.sleep(1)  # Wait a bit before opening a new tab
+#                 except Exception as e:
+#                     print(f"Failed to submit task for genre {genre}. Error: {e}")
 
-    except subprocess.CalledProcessError as e:
-        print(f"An error occurred while managing tabs: {e}")
+#         # Collect results as they complete
+#         for future in as_completed(future_to_genre):
+#             genre = future_to_genre[future]
+#             try:
+#                 html_content = future.result()
+#                 soup = BeautifulSoup(html_content, 'html.parser')
+#                 for a_tag in soup.find_all('a', href=True):
+#                     data_url = a_tag.get('data-url')
+#                     if data_url and re.match(r'^https://freemusicarchive.org/track/.*(downloadOverlay|download)/$', data_url):
+#                         all_track_links.append(data_url)
 
-def trigger_download_from_csv(csv_file: str, download_folder) -> None:
-    """Read the CSV file and open each song's download link in Firefox."""
-    download_folder = os.path.dirname(os.path.abspath(csv_file))  # Directory where CSV is located
-    profile_dir = os.path.join(download_folder, "firefox_profile")
+#             except Exception as e:
+#                 print(f"Error fetching data for genre '{genre}': {e}")
 
-    # Create Firefox profile with custom settings
-    create_custom_firefox_profile(profile_dir, download_folder)
-
-    # Open Firefox
-    firefox_process = open_firefox(profile_dir)
-    
-    if not firefox_process:
-        print("Failed to open Firefox. Exiting.")
-        return
-
-    with open(csv_file, mode='r') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip header
-
-        for row in reader:
-            song_name, download_link = row
-            output_file = os.path.join(download_folder, f"{song_name}.mp3")
+#     if all_track_links:
+#         print("All Extracted Track Links:")
+#         for link in all_track_links:
+#             # print(f"{genre} Link: {link}")
+#             # convert link 
+#             download_link = re.sub(r'downloadOverlay', 'download', link)
             
-            # Open new tab, navigate to the URL, and close the tab
-            open_new_tab_and_navigate(download_link)
+#              # Extract the song name from the URL
+#             song_name_match = re.search(r'/track/([^/]+)/download/', download_link)
+#             if song_name_match:
+#                 song_name = song_name_match.group(1)
+#                 song_data.append((song_name, download_link))
+#                 #folder_path = os.path.join(os.getcwd(), genre)
+#                # save_songs_to_csv(genre, song_data, folder_path)
+#                 print(f"Song Name: {song_name}")
+#                 print(f" {genre} converted link : {download_link}\n")
+            
+#             if song_data:
+#                 # Determine the folder path for this genre
+#                 folder_path = os.path.join(os.getcwd(), genre)
+#                 os.makedirs(folder_path, exist_ok=True)  # Ensure folder exists
+#                 # Save the song data to a CSV file in the genre folder
+#                 save_songs_to_csv(genre, song_data, folder_path)
+            
+#         print(Fore.GREEN + Style.BRIGHT + f"Total number of track URLs found: {len(all_track_links)}" + Style.RESET_ALL)
+#     else:
+#         print("No track links found.")
 
-            # Handle the downloaded song
-            handle_download_song(download_link, output_file, download_folder)
+def fetch_and_print_genre_pages(allowed_genres, folder_song_counts):
+    """Fetch and print the content for each genre page, and extract URLs from data-url attributes."""
+    genre_dict = {name: url for name, url in allowed_genres}
+
+    with ThreadPoolExecutor() as executor:
+        future_to_genre = {}
+
+        for genre in folder_song_counts.keys():
+            genre_url = genre_dict.get(genre)
+            if genre_url:
+                print(f"Fetching content for genre: {genre}")
+                try:
+                    max_songs = folder_song_counts[genre]
+                    page_size = 100
+
+                    # Submit a new task to the executor
+                    future = executor.submit(fetch_all_pages, genre_url, page_size, max_songs, genre)
+                    future_to_genre[future] = genre
+
+                except Exception as e:
+                    print(f"Failed to submit task for genre {genre}. Error: {e}")
+
+        # Collect results as they complete
+        for future in as_completed(future_to_genre):
+            genre = future_to_genre[future]
+            try:
+                html_content = future.result()
+                soup = BeautifulSoup(html_content, 'html.parser')
+                song_data = []  # Move song_data initialization here
+
+                for a_tag in soup.find_all('a', href=True):
+                    data_url = a_tag.get('data-url')
+                    if data_url and re.match(r'^https://freemusicarchive.org/track/.*(downloadOverlay|download)/$', data_url):
+                        # Convert the link to a download link
+                        download_link = re.sub(r'downloadOverlay', 'download', data_url)
+                        # Extract the song name from the URL
+                        song_name_match = re.search(r'/track/([^/]+)/download/', download_link)
+                        if song_name_match:
+                            song_name = song_name_match.group(1)
+                            song_data.append((song_name, download_link))
+
+                            # Print song information
+                            print(f"Song Name: {song_name}")
+                            print(f"{genre} converted link: {download_link}\n")
+
+                # After processing all songs for this genre, save them to a CSV
+                if song_data:
+                    # Determine the folder path for this genre
+                    folder_path = os.path.join(os.getcwd(), genre)
+                    os.makedirs(folder_path, exist_ok=True)  # Ensure folder exists
+                    # Save the song data to a CSV file in the genre folder
+                    save_songs_to_csv(genre, song_data, folder_path)
+                    # Trigger download after saving CSV
+                    csv_file_path = os.path.join(folder_path, f"FMA_{genre}.csv")
+                    trigger_download_from_csv(csv_file_path, folder_path)
+
+            except Exception as e:
+                print(f"Error fetching data for genre '{genre}': {e}")
+
+    print(Fore.GREEN + Style.BRIGHT + "All tasks completed." + Style.RESET_ALL)
+
+
+def fetch_all_pages(base_url: str, page_size: int, max_songs: int, genre: str) -> str:
+    """Fetch HTML content from multiple pages until the required number of songs is reached.
     
-    # Optionally, close Firefox after the downloads are done
-    firefox_process.terminate()
+    Args:
+        base_url (str): The base URL of the genre page.
+        page_size (int): Number of items per page (typically 100).
+        max_songs (int): Maximum number of songs to fetch.
+        genre (str): The genre to be used in the URL.
+    
+    Returns:
+        str: Combined HTML content from all pages.
+    """
+    all_track_links = []
+    all_content = ""
+    page_number = 1
+    total_songs_fetched = 0
+    
+    # Calculate the total number of pages needed
+    total_pages = (max_songs ) // page_size
+    # Debug: Start fetching process
+    print(f"Starting to fetch songs for max_songs={max_songs} with page_size={page_size}...")
+    print(f"Total pages to fetch: {total_pages}")
+  
 
+    # Debug: Start fetching process
+    print(f"Starting to fetch songs for max_songs={max_songs} with page_size={page_size}...")
 
-if __name__ == "__main__":
-    # Example of triggering the download manually
-    csv_file = "path/to/your/csv_file.csv"
-    download_folder = "path/to/your/download/folder"
-    trigger_download_from_csv(csv_file, download_folder)
+    while page_number <= total_pages and total_songs_fetched < max_songs :
+        # Calculate the remaining number of songs to fetch
+        remaining_songs = max_songs - total_songs_fetched
+        current_page_size = min(page_size, remaining_songs)
+
+         # Construct URL for the current page with adjusted page size and dynamic genre
+        url = f"{base_url}?pageSize={current_page_size}&page={page_number}&search-genre={genre}&sort=date&d=0"
+
+        # Debug: Print URL and page info
+        print(f"Fetching page {page_number} with page size {current_page_size}. URL: {url}")
+
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Ensure we notice bad responses
+        except requests.RequestException as e:
+            print(f"Error fetching page {page_number}: {e}")
+            break
+
+        
+        page_content = response.text
+        all_content += page_content
+
+        # Parse the HTML content
+        soup = BeautifulSoup(page_content, 'html.parser')
+        track_links = [a['href'] for a in soup.find_all('a', href=True) if 'downloadOverlay' in a['href']]
+        num_links_on_page = len(track_links)
+        print(f"Links found on page {page_number}: {num_links_on_page}")
+
+        # Update total songs fetched
+        total_songs_fetched += num_links_on_page
+        all_track_links.extend(track_links)
+
+         # Debug: Print the cumulative number of songs fetched so far
+        print(f"Total songs fetched so far: {total_songs_fetched}")
+
+        # Stop fetching if no more songs are found
+        
+        page_number += 1
+
+        # If we reach or exceed the max_songs, stop fetching
+        if total_songs_fetched >= max_songs:
+            print(f"Reached or exceeded the target of {max_songs} songs. Stopping.")
+            break
+        
+       # Debug: Print the total songs fetched at the end
+    print(f"Finished fetching. Total songs fetched: {total_songs_fetched}")
+
+    return all_content
