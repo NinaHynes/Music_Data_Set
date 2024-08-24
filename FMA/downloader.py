@@ -1,64 +1,107 @@
+import subprocess
+import time
 import csv
-import os
 import requests
 from bs4 import BeautifulSoup
+import shutil
+import os
 
-def download_song(session, download_url, output_file):
-    """Download a single song using the provided session."""
+def create_custom_firefox_profile(profile_dir: str, download_dir: str) -> None:
+    """Create a Firefox profile directory and add user.js configuration."""
+    os.makedirs(profile_dir, exist_ok=True)
+    
+    # Define the content for user.js
+    user_js_content = """
+    user_pref("browser.download.folderList", 2);
+    user_pref("browser.download.dir", "{download_dir}");
+    user_pref("browser.helperApps.neverAsk.saveToDisk", "audio/mpeg,application/octet-stream");
+    """.format(download_dir=os.path.abspath(download_dir))
+
+    # Write the content to user.js
+    with open(os.path.join(profile_dir, "user.js"), 'w') as f:
+        f.write(user_js_content)
+    
+    print(f"Custom profile created at: {profile_dir}")
+
+
+def handle_download_song(download_url: str, profile_dir: str) -> None:
+    """Trigger the download of the song from the given URL using the custom Firefox profile."""
     try:
-        download_response = session.get(download_url)
-        download_response.raise_for_status()
-        with open(output_file, 'wb') as file:
-            file.write(download_response.content)
-        print(f"MP3 file downloaded successfully and saved as {output_file}!")
+        # Open Firefox with the custom profile to ensure it uses the correct settings
+        firefox_process = open_firefox(profile_dir)
+        if firefox_process:
+            open_new_tab_and_navigate(download_url)
+            # Optionally, close Firefox after the download
+            firefox_process.terminate()
     except Exception as e:
-        print(f"Failed to download {output_file}. Error: {e}")
+        print(f"Failed to handle download: {e}")
 
-def login_and_create_session(login_url, email, password):
-    """Log in and return a session with cookies."""
-    session = requests.Session()
-    login_page = session.get(login_url)
-    login_page.raise_for_status()
 
-    soup = BeautifulSoup(login_page.text, 'html.parser')
-    csrf_token = soup.find('input', {'name': '_token'}).get('value')
+def open_firefox(profile_dir: str) -> subprocess.Popen:
+    """Open Firefox with a specified profile directory."""
+    try:
+        print("Opening Firefox with custom profile...")
+        firefox_process = subprocess.Popen(["firefox", "-profile", profile_dir])
+        print("Waiting 5 seconds for Firefox to fully launch...")
+        time.sleep(5)
+        return firefox_process
+    except Exception as e:
+        print(f"Failed to open Firefox: {e}")
+        return None
 
-    login_data = {
-        'email': email,
-        'password': password,
-        '_token': csrf_token,
-        'remember': 'on'
-    }
+def open_new_tab_and_navigate(track_url: str) -> None:
+    """Open a new tab in Firefox, navigate to the specified track URL, and close the tab."""
+    try:
+        # Open a new tab using keyboard shortcut (Ctrl+T)
+        subprocess.run(["xdotool", "key", "ctrl+t"], check=True)
+        time.sleep(1)  # Wait for the new tab to open
 
-    response = session.post(login_url, data=login_data)
-    response.raise_for_status()
+        # Type the URL and press Enter
+        subprocess.run(["xdotool", "type", track_url], check=True)
+        subprocess.run(["xdotool", "key", "Return"], check=True)
 
-    if "Sign in to an existing account" in response.text:
-        print("Login failed! Check your credentials.")
-        return 
+        # Wait for the page to load and perform actions (adjust time as necessary)
+        time.sleep(2)  # Adjust this delay based on how long it takes to load the page
+
+        # Close the current tab (Ctrl+W)
+        subprocess.run(["xdotool", "key", "ctrl+w"], check=True)
+        time.sleep(1)  # Wait a bit before opening a new tab
+
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred while managing tabs: {e}")
+
+def trigger_download_from_csv(csv_file: str, download_folder) -> None:
+    """Read the CSV file and open each song's download link in Firefox."""
+    download_folder = os.path.dirname(os.path.abspath(csv_file))  # Directory where CSV is located
+    profile_dir = os.path.join(download_folder, "firefox_profile")
+
+    # Create Firefox profile with custom settings
+    create_custom_firefox_profile(profile_dir, download_folder)
+
+    # Open Firefox
+    firefox_process = open_firefox(profile_dir)
     
-    print("Login successful!")
-    return session
-
-def trigger_download_from_csv(csv_file, download_folder):
-    """Read the CSV and download each song sequentially."""
-    login_url = "https://freemusicarchive.org/login"
-    email = "abdoelnamaki@gmail.com"
-    password = "-~^r@}Vx5Qs7=kX"
-    
-    session = login_and_create_session(login_url, email, password)
-    if session is None:
+    if not firefox_process:
+        print("Failed to open Firefox. Exiting.")
         return
 
-    # Change: Removed the ThreadPoolExecutor and now iterating directly over the CSV rows
     with open(csv_file, mode='r') as file:
         reader = csv.reader(file)
         next(reader)  # Skip header
 
-        for row in reader:  # Change: Loop through each row in the CSV
+        for row in reader:
             song_name, download_link = row
             output_file = os.path.join(download_folder, f"{song_name}.mp3")
-            download_song(session, download_link, output_file)  # Change: Call download directly
+            
+            # Open new tab, navigate to the URL, and close the tab
+            open_new_tab_and_navigate(download_link)
+
+            # Handle the downloaded song
+            handle_download_song(download_link, output_file, download_folder)
+    
+    # Optionally, close Firefox after the downloads are done
+    firefox_process.terminate()
+
 
 if __name__ == "__main__":
     # Example of triggering the download manually
