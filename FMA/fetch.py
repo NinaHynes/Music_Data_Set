@@ -8,16 +8,12 @@ from save_songs_to_csv import save_songs_to_csv
 import os
 from downloader import trigger_download_from_csv
 
-
-
 def fetch_page_content(url: str, page_size: int) -> str:
     """Fetch the HTML content of a given URL with a specific page size."""
     full_url = f"{url}?pageSize={page_size}&page=1&search-genre=Jazz&sort=date&d=0"
     response = requests.get(full_url)
     response.raise_for_status()
     return response.text
-
-
 
 def fetch_and_print_genre_pages(allowed_genres, folder_song_counts):
     """Fetch and print the content for each genre page, and extract URLs from data-url attributes."""
