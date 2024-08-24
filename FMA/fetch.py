@@ -17,6 +17,8 @@ def fetch_page_content(url: str, page_size: int) -> str:
     response.raise_for_status()
     return response.text
 
+
+
 def fetch_and_print_genre_pages(allowed_genres, folder_song_counts):
     """Fetch and print the content for each genre page, and extract URLs from data-url attributes."""
     genre_dict = {name: url for name, url in allowed_genres}
